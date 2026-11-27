@@ -1,0 +1,14 @@
+{
+  "extName": {
+    "message": "Review Link",
+    "description": "Extension name shown in Chrome and the Chrome Web Store."
+  },
+  "extDescription": {
+    "message": "See who knows the code a GitHub pull request changes: a Top 5 by change history, per-file shares, and file anchors.",
+    "description": "Store and chrome://extensions summary. Max 132 characters."
+  },
+  "actionTitle": {
+    "message": "Review Link settings",
+    "description": "Toolbar button tooltip. Clicking it opens the settings page."
+  }
+}
