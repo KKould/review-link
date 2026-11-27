@@ -1,8 +1,9 @@
-// Builds dist/review-link-<version>.zip for the Chrome Web Store.
+// Builds dist/review-link-<version>.zip for the Chrome Web Store, plus the same files
+// unpacked in dist/review-link-<version>/ (the input for scripts/crx.mjs).
 // It checks the manifest first and fails on anything the store would reject.
 // Usage: node scripts/pack.mjs
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, relative, sep } from "node:path";
 import { crc32, deflateRawSync } from "node:zlib";
 import { readPng } from "./png.mjs";
 
@@ -29,6 +30,14 @@ const target = join(root, "dist", `review-link-${manifest.version}.zip`);
 writeFileSync(target, zip(files.map((path) => ({ path, data: readFileSync(join(root, path)) }))));
 console.log(`${relative(root, target)} (${files.length} files)`);
 for (const path of files) console.log(`  ${path}`);
+
+const staged = join(root, "dist", `review-link-${manifest.version}`);
+rmSync(staged, { recursive: true, force: true });
+for (const path of files) {
+  mkdirSync(dirname(join(staged, path)), { recursive: true });
+  cpSync(join(root, path), join(staged, path));
+}
+console.log(`${relative(root, staged)}/ (same files, unpacked)`);
 
 function check(m) {
   if (m.manifest_version !== 3) errors.push("manifest_version must be 3");

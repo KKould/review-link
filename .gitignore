@@ -1,2 +1,6 @@
 node_modules/
 dist/
+# Signing keys must never be committed. Only the public key is tracked.
+*.pem
+!docs/signing-public-key.pem
+*.crx

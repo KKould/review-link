@@ -33,10 +33,21 @@ npm test
 
 ```bash
 npm run pack    # runs the tests, checks the manifest, writes dist/review-link-<version>.zip
+npm run crx     # pack, then sign dist/review-link-<version>.crx with your private key
 npm run icons   # re-renders icons/*.png from scripts/icon.svg.js; needs Chrome (pass a path or set CHROME)
 ```
 
 `pack` refuses to build if an icon has the wrong size, a `__MSG_*__` key is missing from a locale, a store description is over 132 characters, or the manifest points to a missing file. The zip only contains `manifest.json`, `_locales/`, `icons/*.png` and `src/`. Bump `version` in `manifest.json` before each upload.
+
+### Signed CRX (Verified CRX uploads)
+
+The developer account uses Verified CRX uploads, so the dashboard only accepts a `.crx` signed with the registered key.
+
+- The private key lives outside the repo at `~/.config/review-link/review-link-signing.pem` (mode 600). Set `REVIEW_LINK_KEY` to use another path. `*.pem` and `*.crx` are git-ignored.
+- Its public key is [`docs/signing-public-key.pem`](docs/signing-public-key.pem). Paste it into Package > Verified CRX uploads.
+- Back the private key up offline. If it is lost, replacing it goes through Chrome Web Store support and can take up to a week.
+- On another machine, restore the backed-up key to that path. Do not create a new one: a new key does not match the registered public key and the dashboard will reject the upload. `node scripts/crx.mjs --init-key` is only for the very first setup, and it refuses to overwrite an existing key.
+- `crx` signs `dist/review-link-<version>/`, the same files as the zip. If Chrome is not `google-chrome` on PATH, set `CHROME=/path/to/chrome`.
 
 Store submission drafts:
 
