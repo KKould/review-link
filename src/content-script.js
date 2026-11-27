@@ -170,7 +170,7 @@
     const time = params.resetAt
       ? new Date(params.resetAt).toLocaleTimeString(settings.languageId === "zh" ? "zh-CN" : "en-US")
       : "";
-    return t(code, { ...params, time });
+    return t(code, { ...params, time, detail: params.detail || "—" });
   }
 
   function subtitle() {

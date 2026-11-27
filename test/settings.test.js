@@ -30,8 +30,8 @@ test("Chinese and English cover every message used by the extension", () => {
     ...[...readFileSync(new URL("../src/options.html", import.meta.url), "utf8").matchAll(/data-i18n="([^"]+)"/g)].map(
       (match) => match[1]
     ),
-    ...[...readFileSync(new URL("../src/service-worker.js", import.meta.url), "utf8").matchAll(/"(error\.[\w]+)"/g)].map(
-      (match) => match[1]
+    ...["../src/service-worker.js", "../src/github-errors.js"].flatMap((file) =>
+      [...readFileSync(new URL(file, import.meta.url), "utf8").matchAll(/"(error\.[\w]+)"/g)].map((match) => match[1])
     ),
     ...["ignored", "no-history", "skipped"].map((status) => `status.${status}`),
   ]);

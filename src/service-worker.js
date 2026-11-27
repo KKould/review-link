@@ -1,3 +1,4 @@
+import { describeFailure } from "./github-errors.js";
 import { fileShares, isIgnoredPath, prShares } from "./relevance.js";
 
 const API = "https://api.github.com";
@@ -107,19 +108,9 @@ async function github(path) {
   if (response.ok) {
     return response.json();
   }
-  if ((response.status === 403 || response.status === 429) && response.headers.get("x-ratelimit-remaining") === "0") {
-    const reset = Number(response.headers.get("x-ratelimit-reset")) * 1000;
-    throw new ReviewLinkError(githubToken ? "error.rateLimit" : "error.rateLimitNoToken", {
-      resetAt: Number.isFinite(reset) ? reset : null,
-    });
-  }
-  if (response.status === 404 && !githubToken) {
-    throw new ReviewLinkError("error.notFound");
-  }
-  if (response.status === 401) {
-    throw new ReviewLinkError("error.badToken");
-  }
-  throw new ReviewLinkError("error.http", { status: response.status });
+  const body = await response.text().catch(() => "");
+  const { code, params } = describeFailure({ status: response.status, headers: response.headers, body, hasToken: Boolean(githubToken) });
+  throw new ReviewLinkError(code, params);
 }
 
 // Carries a message key so the page can show it in the user's language.
