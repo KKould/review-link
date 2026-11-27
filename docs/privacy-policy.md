@@ -2,8 +2,8 @@
 
 Last updated / 最后更新：2026-11-27
 
-> Draft. Replace `<CONTACT_EMAIL>` before publishing, and host this page at a public URL.
-> 草稿。发布前把 `<CONTACT_EMAIL>` 换成联系邮箱，并放到一个公开可访问的网址上。
+> Draft. Host this page at a public URL before publishing, then remove this note.
+> 草稿。发布前把本页放到一个公开可访问的网址上，然后删掉这段说明。
 
 ---
 
@@ -40,7 +40,7 @@ The use of information received from GitHub's API follows the [Chrome Web Store 
 
 **Changes and contact**
 
-Changes to this policy will be posted on this page with a new date. Questions: `<CONTACT_EMAIL>`.
+Changes to this policy will be posted on this page with a new date. Questions: `kould2333@gmail.com`.
 
 ---
 
@@ -77,4 +77,4 @@ GitHub 如何处理 API 请求，见 [GitHub 隐私声明](https://docs.github.c
 
 **变更与联系**
 
-本政策如有变更，会在此页面更新并修改日期。如有问题请联系：`<CONTACT_EMAIL>`。
+本政策如有变更，会在此页面更新并修改日期。如有问题请联系：`kould2333@gmail.com`。
