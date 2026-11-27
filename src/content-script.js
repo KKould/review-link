@@ -267,13 +267,24 @@
       if (container.querySelector(":scope .review-link-badge")) {
         continue;
       }
+      const badge = renderBadge(file);
+      // GitHub's newer diff view: put the badge right after the file name, before the
+      // toolbar, so it stays visible next to the path instead of at the far right.
+      const reactHeader = container.querySelector("[class*='diff-file-header']");
+      const nameBlock = reactHeader?.querySelector("h3")?.parentElement;
+      if (nameBlock && nameBlock.parentElement === reactHeader) {
+        badge.classList.add("review-link-badge--inline");
+        nameBlock.after(badge);
+        continue;
+      }
       const header =
         container.querySelector(".file-header .file-info") ||
         container.querySelector(".file-header") ||
-        container.querySelector("[class*='DiffFileHeader'], [class*='diff-file-header']") ||
+        reactHeader ||
+        container.querySelector("[class*='DiffFileHeader']") ||
         container.firstElementChild ||
         container;
-      header.append(renderBadge(file));
+      header.append(badge);
     }
   }
 

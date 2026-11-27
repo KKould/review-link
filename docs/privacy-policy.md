@@ -2,9 +2,6 @@
 
 Last updated / 最后更新：2026-11-27
 
-> Draft. Host this page at a public URL before publishing, then remove this note.
-> 草稿。发布前把本页放到一个公开可访问的网址上，然后删掉这段说明。
-
 ---
 
 ## English

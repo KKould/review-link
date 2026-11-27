@@ -274,6 +274,20 @@
   line-height: 1.2;
 }
 
+/* Newer GitHub diff header: sits between the file name and the toolbar and
+   shrinks (clipping extra chips) instead of pushing the toolbar off-screen. */
+.review-link-badge--inline {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: 4px;
+  overflow: hidden;
+}
+
+.review-link-badge--inline .review-link-bubble {
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
 .review-link-connector {
   width: 14px;
   height: 2px;
