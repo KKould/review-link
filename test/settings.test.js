@@ -33,7 +33,8 @@ test("Chinese and English cover every message used by the extension", () => {
     ...["../src/service-worker.js", "../src/github-errors.js"].flatMap((file) =>
       [...readFileSync(new URL(file, import.meta.url), "utf8").matchAll(/"(error\.[\w]+)"/g)].map((match) => match[1])
     ),
-    ...["ignored", "no-history", "skipped"].map((status) => `status.${status}`),
+    ...["ignored", "no-history", "skipped", "pending", "stopped"].map((status) => `status.${status}`),
+    "error.disconnected",
   ]);
   for (const key of used) {
     assert.notEqual(zh(key), key, `zh missing ${key}`);

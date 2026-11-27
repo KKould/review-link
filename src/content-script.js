@@ -14,6 +14,7 @@
     loading: false,
     focus: null,
     collapsed: false,
+    position: null, // { left, top } in viewport pixels once the user drags the panel
     hashes: new Map(),
     activePath: null,
   };
@@ -22,8 +23,10 @@
   init();
 
   async function init() {
-    const stored = await chrome.storage.local.get("panelCollapsed");
+    const stored = await chrome.storage.local.get(["panelCollapsed", "panelPosition"]);
     state.collapsed = Boolean(stored.panelCollapsed);
+    state.position = validPosition(stored.panelPosition);
+    window.addEventListener("resize", throttleFrame(applyPosition));
     applySettings(await Settings.load());
     chrome.storage.onChanged.addListener(async (changes, area) => {
       if (area === "sync" && (changes.themeId || changes.languageId)) {
@@ -74,38 +77,94 @@
     return { owner, repo, number: Number(number), tab, base: `/${owner}/${repo}/pull/${number}` };
   }
 
-  async function load(pr, { force = false } = {}) {
+  function load(pr, { force = false } = {}) {
+    state.port?.disconnect();
     const key = state.prKey;
-    state.loading = true;
-    state.error = null;
+    const port = chrome.runtime.connect({ name: "review-link:analyze" });
+    Object.assign(state, { port, loading: true, error: null, progress: null });
+    clearBadges();
     render();
-    try {
-      const response = await chrome.runtime.sendMessage({
-        type: "review-link:analyze",
-        payload: { owner: pr.owner, repo: pr.repo, number: pr.number, force },
+
+    const current = () => key === state.prKey && state.port === port;
+    // Messages are applied one at a time; "start" awaits the diff anchor hashes.
+    let queue = Promise.resolve();
+    port.onMessage.addListener((message) => {
+      queue = queue.then(() => (current() ? apply(message) : undefined)).catch(fail);
+    });
+    port.onDisconnect.addListener(() => {
+      queue = queue.then(() => {
+        if (current() && state.loading) {
+          fail({ code: "error.disconnected", params: {} });
+        }
       });
-      if (key !== state.prKey) {
-        return;
-      }
-      if (!response?.ok) {
-        throw response?.error || { code: "error.unknown", params: { message: "no response" } };
-      }
-      state.data = response.data;
-      await Promise.all(response.data.files.map(async (file) => state.hashes.set(file.path, await diffId(file.path))));
-    } catch (error) {
-      if (key === state.prKey) {
-        state.error = error?.code
-          ? error
-          : { code: "error.unknown", params: { message: error?.message || String(error) } };
-      }
-    } finally {
-      if (key === state.prKey) {
-        state.loading = false;
-        render();
-        clearBadges();
+    });
+    port.postMessage({ owner: pr.owner, repo: pr.repo, number: pr.number, force });
+
+    async function apply(message) {
+      if (message.type === "start") {
+        state.data = { author: message.author, top: [], files: message.files };
+        await Promise.all(message.files.map(async (file) => state.hashes.set(file.path, await diffId(file.path))));
+        const total = message.files.filter((file) => file.status === "pending").length;
+        state.progress = { done: 0, total };
+        scheduleRender();
         decorateFiles();
+      } else if (message.type === "file") {
+        const index = state.data.files.findIndex((file) => file.path === message.file.path);
+        if (index >= 0) {
+          state.data.files[index] = message.file;
+        }
+        state.data.top = message.top;
+        state.progress = { done: message.done, total: message.total };
+        refreshBadge(message.file.path);
+        scheduleRender();
+      } else if (message.type === "done") {
+        state.data.top = message.top;
+        finish();
+      } else if (message.type === "error") {
+        fail(message.error);
       }
     }
+
+    function fail(error) {
+      if (!current()) {
+        return;
+      }
+      state.error = error?.code ? error : { code: "error.unknown", params: { message: error?.message || String(error) } };
+      // Keep what already arrived; mark the rest as not analyzed.
+      for (const file of state.data?.files || []) {
+        if (file.status === "pending") {
+          file.status = "stopped";
+        }
+      }
+      finish();
+    }
+
+    function finish() {
+      state.loading = false;
+      state.port = null;
+      port.disconnect();
+      render();
+      clearBadges();
+      decorateFiles();
+    }
+  }
+
+  // Coalesces panel re-renders while results stream in.
+  let renderPending = false;
+  function scheduleRender() {
+    if (renderPending) {
+      return;
+    }
+    renderPending = true;
+    requestAnimationFrame(() => {
+      renderPending = false;
+      render();
+    });
+  }
+
+  function refreshBadge(path) {
+    findFileContainer(path)?.querySelector(".review-link-badge")?.remove();
+    decorateFiles();
   }
 
   // GitHub anchors every file in the diff as #diff-<sha256(path)>.
@@ -116,6 +175,8 @@
   }
 
   function teardown() {
+    state.port?.disconnect();
+    state.port = null;
     dom.panel?.remove();
     dom.panel = null;
     clearBadges();
@@ -136,10 +197,16 @@
     if (!panel) {
       return;
     }
+    // Rebuilding the panel would reset the anchor list's scroll position.
+    const listScroll = panel.querySelector(".review-link-anchors")?.scrollTop || 0;
     panel.replaceChildren();
     panel.classList.toggle("review-link-panel--collapsed", state.collapsed);
     if (state.collapsed) {
-      panel.append(button("review-link-pill", "Review Link", () => setCollapsed(false)));
+      const pill = button("review-link-pill", "Review Link", () => setCollapsed(false));
+      pill.title = t("dragHint");
+      makeDraggable(pill);
+      panel.append(pill);
+      applyPosition();
       return;
     }
 
@@ -149,13 +216,28 @@
       button(ghost, t("settings"), () => chrome.runtime.sendMessage({ type: "review-link:open-options" })),
       button(ghost, t("collapse"), () => setCollapsed(true)),
     ]);
+    const header = el("div", { className: "review-link-panel__header", title: t("dragHint") }, [
+      el("div", { className: "review-link-panel__title", textContent: "Review Link" }),
+      actions,
+    ]);
+    makeDraggable(header);
+    header.addEventListener("dblclick", (event) => {
+      if (!event.target.closest("button")) {
+        resetPosition();
+      }
+    });
     panel.append(
-      el("div", { className: "review-link-panel__header" }, [
-        el("div", { className: "review-link-panel__title", textContent: "Review Link" }),
-        actions,
-      ]),
+      header,
       el("div", { className: "review-link-hint review-link-panel__subtitle", textContent: subtitle() })
     );
+    if (state.loading) {
+      const share = state.progress?.total ? state.progress.done / state.progress.total : 0;
+      panel.append(
+        el("div", { className: "review-link-progress" }, [
+          el("span", { className: "review-link-progress__fill", style: `width:${(share * 100).toFixed(1)}%` }),
+        ])
+      );
+    }
 
     if (state.error) {
       panel.append(el("div", { className: "review-link-error", textContent: errorText(state.error) }));
@@ -164,6 +246,101 @@
       return;
     }
     panel.append(renderTop(), renderFileAnchors());
+    const list = panel.querySelector(".review-link-anchors");
+    if (list) {
+      list.scrollTop = listScroll;
+    }
+    applyPosition();
+  }
+
+  // Dragging: the header (expanded) or the pill (collapsed) moves the panel. A press that
+  // moves less than 4px stays a click, so the pill still expands and buttons still work.
+  function makeDraggable(handle) {
+    let suppressClick = false;
+    handle.addEventListener(
+      "click",
+      (event) => {
+        if (suppressClick) {
+          suppressClick = false;
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      },
+      { capture: true }
+    );
+    handle.addEventListener("pointerdown", (event) => {
+      const onButton = event.target.closest("button");
+      if (event.button !== 0 || (onButton && onButton !== handle)) {
+        return;
+      }
+      const panel = dom.panel;
+      const rect = panel.getBoundingClientRect();
+      const start = { x: event.clientX, y: event.clientY, left: rect.left, top: rect.top };
+      let moved = false;
+      handle.setPointerCapture(event.pointerId);
+
+      const onMove = (move) => {
+        const dx = move.clientX - start.x;
+        const dy = move.clientY - start.y;
+        if (!moved && Math.hypot(dx, dy) < 4) {
+          return;
+        }
+        moved = true;
+        panel.classList.add("review-link-panel--dragging");
+        state.position = { left: start.left + dx, top: start.top + dy };
+        applyPosition();
+      };
+      const onUp = () => {
+        handle.removeEventListener("pointermove", onMove);
+        handle.removeEventListener("pointerup", onUp);
+        handle.removeEventListener("pointercancel", onUp);
+        panel.classList.remove("review-link-panel--dragging");
+        if (moved) {
+          suppressClick = true;
+          // Save where the panel actually stopped, not where the pointer went past the edge.
+          state.position = { left: parseFloat(panel.style.left), top: parseFloat(panel.style.top) };
+          chrome.storage.local.set({ panelPosition: state.position });
+        }
+      };
+      handle.addEventListener("pointermove", onMove);
+      handle.addEventListener("pointerup", onUp);
+      handle.addEventListener("pointercancel", onUp);
+    });
+  }
+
+  // Keeps the whole panel inside the viewport; state.position keeps what the user chose,
+  // so the panel moves back once the window grows again.
+  function applyPosition() {
+    const panel = dom.panel;
+    if (!panel) {
+      return;
+    }
+    if (!state.position) {
+      panel.style.left = "";
+      panel.style.top = "";
+      panel.style.right = "";
+      return;
+    }
+    const margin = 8;
+    const maxLeft = Math.max(margin, window.innerWidth - panel.offsetWidth - margin);
+    const maxTop = Math.max(margin, window.innerHeight - panel.offsetHeight - margin);
+    panel.style.left = `${Math.round(clamp(state.position.left, margin, maxLeft))}px`;
+    panel.style.top = `${Math.round(clamp(state.position.top, margin, maxTop))}px`;
+    panel.style.right = "auto";
+  }
+
+  function resetPosition() {
+    state.position = null;
+    applyPosition();
+    chrome.storage.local.remove("panelPosition");
+  }
+
+  function validPosition(value) {
+    return value && Number.isFinite(value.left) && Number.isFinite(value.top) ? { left: value.left, top: value.top } : null;
+  }
+
+  function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
   }
 
   function errorText({ code, params = {} }) {
@@ -175,7 +352,9 @@
 
   function subtitle() {
     if (state.loading) {
-      return t("loading");
+      return state.progress?.total
+        ? t("loadingProgress", { done: state.progress.done, total: state.progress.total })
+        : t("loading");
     }
     if (!state.data) {
       return t("subtitleIdle");
@@ -188,7 +367,7 @@
       el("div", { className: "review-link-label", textContent: t("topTitle") }),
     ]);
     if (!state.data.top.length) {
-      section.append(el("div", { className: "review-link-hint", textContent: t("noHistory") }));
+      section.append(el("div", { className: "review-link-hint", textContent: state.loading ? t("loading") : t("noHistory") }));
       return section;
     }
     for (const [index, person] of state.data.top.entries()) {
@@ -232,7 +411,14 @@
         el("span", { className: "review-link-anchor-item__path", textContent: shortPath(file.path) }),
         el("span", {
           className: "review-link-anchor-item__meta",
-          textContent: focusShare != null ? percent(focusShare) : lead ? `@${lead.login} ${percent(lead.share)}` : "—",
+          textContent:
+            file.status === "pending"
+              ? "…"
+              : focusShare != null
+                ? percent(focusShare)
+                : lead
+                  ? `@${lead.login} ${percent(lead.share)}`
+                  : "—",
         })
       );
       list.append(item);
@@ -320,6 +506,10 @@
       el("span", { className: "review-link-connector" }),
       bubble,
     ]);
+    badge.classList.toggle("review-link-badge--pending", file.status === "pending");
+    if (file.status === "ok") {
+      badge.classList.add("review-link-badge--enter");
+    }
     // Keep clicks from toggling or collapsing GitHub's file header.
     badge.addEventListener("click", (event) => event.stopPropagation());
     return badge;

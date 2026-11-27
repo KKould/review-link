@@ -64,7 +64,14 @@
   cursor: pointer;
 }
 
+#review-link-panel.review-link-panel--dragging,
+#review-link-panel.review-link-panel--dragging * {
+  cursor: grabbing;
+  user-select: none;
+}
+
 .review-link-pill {
+  cursor: grab;
   padding: 8px 14px;
   border: 1px solid var(--rl-border);
   border-radius: 999px;
@@ -74,6 +81,7 @@
 }
 
 .review-link-panel__header {
+  cursor: grab;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -286,6 +294,55 @@
 .review-link-badge--inline .review-link-bubble {
   flex-wrap: nowrap;
   white-space: nowrap;
+}
+
+/* Streaming: pending files pulse, finished ones fade in (WebEcho's enter motion). */
+.review-link-progress {
+  height: 3px;
+  margin: 2px 0 6px;
+  border-radius: 999px;
+  background: var(--rl-input-bg);
+  overflow: hidden;
+}
+
+.review-link-progress__fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--rl-accent);
+  transition: width 200ms ease;
+}
+
+.review-link-badge--pending .review-link-dot {
+  animation: review-link-pulse 1.2s ease-in-out infinite;
+}
+
+.review-link-badge--enter {
+  animation: review-link-enter 260ms cubic-bezier(0.2, 0.75, 0.2, 1);
+}
+
+@keyframes review-link-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes review-link-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 4px, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .review-link-badge--pending .review-link-dot,
+  .review-link-badge--enter {
+    animation: none;
+  }
+
+  .review-link-progress__fill {
+    transition: none;
+  }
 }
 
 .review-link-connector {

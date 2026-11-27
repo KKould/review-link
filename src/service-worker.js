@@ -7,14 +7,26 @@ const HISTORY_DEPTH = 50;
 const CONCURRENCY = 4;
 const memoryCache = new Map();
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.type !== "review-link:analyze") {
-    return false;
+// Streaming analysis over a port, so the page can show each file as soon as it is done:
+//   -> { owner, repo, number, force }
+//   <- { type: "start", author, files }            every file; analyzable ones are "pending"
+//   <- { type: "file", file, top, done, total }    one per analyzed file, largest change first
+//   <- { type: "done", top } | { type: "error", error }
+// Closing the port (navigation, refresh) stops the remaining requests.
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "review-link:analyze") {
+    return;
   }
-  analyzePullRequest(message.payload)
-    .then((data) => sendResponse({ ok: true, data }))
-    .catch((error) => sendResponse({ ok: false, error: toWireError(error) }));
-  return true;
+  let closed = false;
+  port.onDisconnect.addListener(() => {
+    closed = true;
+  });
+  const emit = (message) => {
+    if (!closed) port.postMessage(message);
+  };
+  port.onMessage.addListener((request) => {
+    streamPullRequest(request, emit, () => closed).catch((error) => emit({ type: "error", error: toWireError(error) }));
+  });
 });
 
 chrome.runtime.onMessage.addListener((message) => {
@@ -26,47 +38,53 @@ chrome.runtime.onMessage.addListener((message) => {
 
 chrome.action.onClicked.addListener(() => chrome.runtime.openOptionsPage());
 
-async function analyzePullRequest({ owner, repo, number, force = false }) {
+async function streamPullRequest({ owner, repo, number, force = false }, emit, isClosed) {
   const key = `${owner}/${repo}#${number}`;
-  const pr = await github(`/repos/${owner}/${repo}/pulls/${number}`);
+  const [pr, files] = await Promise.all([github(`/repos/${owner}/${repo}/pulls/${number}`), listFiles(owner, repo, number)]);
   const cacheKey = `${key}@${pr.base.sha}..${pr.head.sha}`;
   if (force) {
     memoryCache.delete(cacheKey);
   }
-  if (memoryCache.has(cacheKey)) {
-    return memoryCache.get(cacheKey);
+  const cached = memoryCache.get(cacheKey);
+  if (cached) {
+    emit({ type: "start", author: cached.author, files: cached.files });
+    emit({ type: "done", top: cached.top });
+    return;
   }
 
-  const files = await listFiles(owner, repo, number);
   const author = pr.user?.login;
   const exclude = author ? [author] : [];
-  const ranked = files
-    .filter((file) => !isIgnoredPath(file.filename))
-    .sort((a, b) => b.changes - a.changes);
+  const ranked = files.filter((file) => !isIgnoredPath(file.filename)).sort((a, b) => b.changes - a.changes);
   const analyzed = new Set(ranked.slice(0, MAX_FILES).map((file) => file.filename));
+  const results = files.map((file) => ({
+    path: file.filename,
+    changes: file.changes,
+    shares: [],
+    status: isIgnoredPath(file.filename) ? "ignored" : analyzed.has(file.filename) ? "pending" : "skipped",
+  }));
+  emit({ type: "start", author, files: results });
 
-  const results = await mapLimit(files, CONCURRENCY, async (file) => {
-    const base = { path: file.filename, changes: file.changes, shares: [] };
-    if (isIgnoredPath(file.filename)) {
-      return { ...base, status: "ignored" };
-    }
-    if (!analyzed.has(file.filename)) {
-      return { ...base, status: "skipped" };
-    }
+  const order = results
+    .map((file, index) => index)
+    .filter((index) => results[index].status === "pending")
+    .sort((a, b) => results[b].changes - results[a].changes);
+  let done = 0;
+  await mapLimit(order, CONCURRENCY, isClosed, async (index) => {
+    const file = files[index];
     const historyPath = file.status === "renamed" && file.previous_filename ? file.previous_filename : file.filename;
     const commits = await history(owner, repo, pr.base.sha, historyPath);
     const shares = fileShares(commits, { exclude });
-    return { ...base, shares, status: shares.length ? "ok" : "no-history" };
+    results[index] = { ...results[index], shares, status: shares.length ? "ok" : "no-history" };
+    done += 1;
+    emit({ type: "file", file: results[index], top: prShares(results), done, total: order.length });
   });
+  if (isClosed()) {
+    return;
+  }
 
-  const data = {
-    author,
-    baseSha: pr.base.sha,
-    top: prShares(results),
-    files: results,
-  };
+  const data = { author, baseSha: pr.base.sha, top: prShares(results), files: results };
   memoryCache.set(cacheKey, data);
-  return data;
+  emit({ type: "done", top: data.top });
 }
 
 async function listFiles(owner, repo, number) {
@@ -129,16 +147,22 @@ function toWireError(error) {
   return { code: "error.unknown", params: { message: error?.message || String(error) } };
 }
 
-async function mapLimit(items, limit, fn) {
-  const results = new Array(items.length);
+// Runs fn over items with at most `limit` in flight. Stops starting new items once
+// `shouldStop()` is true or any item fails; rejects with the first failure.
+async function mapLimit(items, limit, shouldStop, fn) {
   let next = 0;
+  let failed = false;
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) {
-      const index = next;
+    while (next < items.length && !failed && !shouldStop()) {
+      const item = items[next];
       next += 1;
-      results[index] = await fn(items[index]);
+      try {
+        await fn(item);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
     }
   });
   await Promise.all(workers);
-  return results;
 }
